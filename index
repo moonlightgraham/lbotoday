@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Superior LBO Calculator - LBO.today</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1000px; margin: 20px auto; background: #f5f5f5; color: #333; }
+        h1 { text-align: center; color: #2c3e50; }
+        .container { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
+        .input-group { margin: 10px 0; }
+        label { display: inline-block; width: 200px; }
+        input { padding: 8px; width: 100px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #results { margin-top: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: right; border-bottom: 1px solid #ddd; }
+        th { background: #f0f0f0; }
+        .error { color: #ff4d4d; text-align: center; }
+        #cashFlowChart { margin-top: 20px; max-height: 300px; }
+    </style>
+</head>
+<body>
+    <h1>Superior LBO Calculator</h1>
+    <div class="container">
+        <div class="input-group"><label>Sales ($):</label><input type="number" id="sales" value="1000000" oninput="debouncedCalculate()"></div>
+        <div class="input-group"><label>EBITDA Margin (%):</label><input type="number" id="ebitdaMargin" value="20" oninput="debouncedCalculate()"></div>
+        <div class="input-group"><label>Entry Multiple:</label><input type="number" id="entryMultiple" value="6" oninput="debouncedCalculate()"></div>
+        <div class="input-group"><label>Exit Multiple:</label><input type="number" id="exitMultiple" value="6" oninput="debouncedCalculate()"></div>
+        <div class="input-group"><label>Senior Debt (%):</label><input type="number" id="seniorDebtPercent" value="50" oninput="debouncedCalculate()"></div>
+        <div class="input-group"><label>Senior Interest (%):</label><input type="number" id="seniorInterestRate" value="4" oninput="debouncedCalculate()"></div>
+        <div class="input-group"><label>Years:</label><input type="number" id="years" value="5" min="1" max="10" oninput="debouncedCalculate()"></div>
+        <button onclick="calculateLBO()">Calculate</button>
+    </div>
+    <div id="results"></div>
+    <canvas id="cashFlowChart"></canvas>
+
+    <script>
+        let chartInstance = null;
+        const debounce = (func, wait) => {
+            let timeout;
+            return () => { clearTimeout(timeout); timeout = setTimeout(func, wait); };
+        };
+
+        function calculateLBO() {
+            const inputs = {
+                sales: parseFloat(document.getElementById('sales').value) || 0,
+                ebitdaMargin: parseFloat(document.getElementById('ebitdaMargin').value) / 100 || 0,
+                entryMultiple: parseFloat(document.getElementById('entryMultiple').value) || 1,
+                exitMultiple: parseFloat(document.getElementById('exitMultiple').value) || 1,
+                seniorDebtPercent: parseFloat(document.getElementById('seniorDebtPercent').value) / 100 || 0,
+                seniorInterestRate: parseFloat(document.getElementById('seniorInterestRate').value) / 100 || 0,
+                years: parseInt(document.getElementById('years').value) || 1
+            };
+
+            if (inputs.seniorDebtPercent > 1) {
+                document.getElementById('results').innerHTML = '<p class="error">Error: Senior Debt % cannot exceed 100%</p>';
+                return;
+            }
+
+            const ebitda = inputs.sales * inputs.ebitdaMargin;
+            const entryValue = ebitda * inputs.entryMultiple;
+            const seniorDebt = entryValue * inputs.seniorDebtPercent;
+            const equity = entryValue - seniorDebt;
+            let currentSales = inputs.sales, currentDebt = seniorDebt;
+            const cashFlows = [-equity], chartData = [0];
+            const tableRows = ['<tr><th>Year</th><th>Sales</th><th>FCF</th><th>Debt</th></tr>'];
+
+            for (let year = 1; year <= inputs.years; year++) {
+                currentSales *= 1.05; // 5% growth
+                const yearEbitda = currentSales * inputs.ebitdaMargin;
+                const interest = currentDebt * inputs.seniorInterestRate;
+                const fcf = yearEbitda - interest;
+                currentDebt = Math.max(currentDebt - (seniorDebt * 0.02), 0); // 2% repayment
+                cashFlows.push(fcf);
+                chartData.push(fcf);
+                tableRows.push(`<tr><td>${year}</td><td>$${currentSales.toLocaleString()}</td><td>$${fcf.toLocaleString()}</td><td>$${currentDebt.toLocaleString()}</td></tr>`);
+            }
+
+            const exitEbitda = currentSales * inputs.ebitdaMargin;
+            const exitValue = exitEbitda * inputs.exitMultiple;
+            cashFlows[cashFlows.length - 1] += exitValue - currentDebt;
+            chartData[chartData.length - 1] += exitValue - currentDebt;
+
+            const irr = cashFlows.reduce((npv, cf, t) => npv + cf / Math.pow(1.1, t), 0) > 0 ? 10 : -10; // Simplified IRR
+
+            document.getElementById('results').innerHTML = `
+                <p>Entry Value: $${entryValue.toLocaleString()}</p>
+                <p>Equity: $${equity.toLocaleString()}</p>
+                <p>Exit Value: $${exitValue.toLocaleString()}</p>
+                <p>IRR: ${irr.toFixed(2)}%</p>
+                <table>${tableRows.join('')}</table>
+            `;
+
+            if (chartInstance) chartInstance.destroy();
+            const ctx = document.getElementById('cashFlowChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: { labels: ['Entry', ...Array(inputs.years).fill().map((_, i) => `Year ${i + 1}`)], datasets: [{ label: 'FCF', data: chartData, backgroundColor: '#007bff' }] },
+                options: { scales: { y: { beginAtZero: true } } }
+            });
+        }
+
+        const debouncedCalculate = debounce(calculateLBO, 300);
+        calculateLBO(); // Initial run
+    </script>
+</body>
+</html>
